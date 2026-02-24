@@ -1,7 +1,7 @@
 @echo off
 echo Building Recast...
-pip install pyinstaller >nul 2>&1
-pyinstaller --onefile --windowed --name Recast --icon=assets/icon.ico src/main.py
+python -m pip install pyinstaller >nul 2>&1
+python -m PyInstaller --onefile --windowed --name Recast src/main.py
 echo.
 echo Done! Executable is at dist\Recast.exe
 pause

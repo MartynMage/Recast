@@ -40,6 +40,43 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Optional tool detection (runs once at startup)
+# ---------------------------------------------------------------------------
+
+def _check_tool(cmd):
+    try:
+        subprocess.run([cmd, "--version"], capture_output=True, timeout=5)
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+LIBREOFFICE_AVAILABLE = _check_tool("libreoffice") or _check_tool("soffice")
+CALIBRE_AVAILABLE     = _check_tool("ebook-convert")
+
+# Conversions that require LibreOffice: {in_fmt: [out_fmts]}
+REQUIRES_LIBREOFFICE = {
+    "pdf":  ["docx", "txt", "html", "rtf"],
+    "docx": ["pdf", "rtf", "odt"],
+    "html": ["pdf", "docx", "rtf"],
+    "pptx": ["pdf"],
+    "odt":  ["pdf", "docx", "txt", "html", "rtf"],
+    "rtf":  ["pdf", "docx", "txt", "html"],
+}
+
+LIBREOFFICE_INSTALL = "Requires LibreOffice\nlibreoffice.org — free install"
+CALIBRE_INSTALL     = "Requires Calibre\ncalibre-ebook.com — free install"
+
+
+def get_chip_disabled_reason(category, in_fmt, out_fmt):
+    """Returns tooltip string if conversion unavailable, else None."""
+    if category == "ebook" and not CALIBRE_AVAILABLE:
+        return CALIBRE_INSTALL
+    if out_fmt in REQUIRES_LIBREOFFICE.get(in_fmt, []) and not LIBREOFFICE_AVAILABLE:
+        return LIBREOFFICE_INSTALL
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Theme
 # ---------------------------------------------------------------------------
 
@@ -54,8 +91,8 @@ SUCCESS    = "#22d3a0"
 WARNING    = "#f59e0b"
 ERROR      = "#f87171"
 TEXT_PRI   = "#f0f0f5"
-TEXT_SEC   = "#8888aa"
-TEXT_DIM   = "#44445a"
+TEXT_SEC   = "#a0a0c0"
+TEXT_DIM   = "#6a6a88"
 
 FONT_HEAD  = ("Segoe UI", 22, "bold")
 FONT_TITLE = ("Segoe UI", 13, "bold")
@@ -508,42 +545,113 @@ class SidebarButton(ctk.CTkFrame):
 
 
 class FormatChip(ctk.CTkFrame):
-    def __init__(self, master, fmt, on_select, **kwargs):
-        super().__init__(master, fg_color=CARD_BG, corner_radius=8, cursor="hand2", **kwargs)
-        self.fmt       = fmt
-        self.on_select = on_select
-        self.selected  = False
+    def __init__(self, master, fmt, on_select, disabled_reason=None, **kwargs):
+        bg = "#111116" if disabled_reason else CARD_BG
+        super().__init__(master, fg_color=bg, corner_radius=10,
+                         border_width=1,
+                         border_color=BORDER if disabled_reason else "#2e2e3a",
+                         cursor="hand2" if not disabled_reason else "arrow", **kwargs)
+        self.fmt             = fmt
+        self.on_select       = on_select
+        self.selected        = False
+        self.disabled_reason = disabled_reason
+        self._tooltip_win    = None
 
+        inner = ctk.CTkFrame(self, fg_color="transparent")
+        inner.pack(padx=14, pady=10)
+
+        # Format name — large and readable
+        name_color = "#404058" if disabled_reason else "#d0d0e8"
         self.lbl = ctk.CTkLabel(
-            self, text=fmt.upper(),
-            font=FONT_MONO, text_color=TEXT_SEC, padx=10, pady=6,
+            inner, text=fmt.upper(),
+            font=("Segoe UI", 13, "bold"),
+            text_color=name_color,
         )
         self.lbl.pack()
 
-        for w in [self, self.lbl]:
+        # Extension tag below — clearly readable
+        if not disabled_reason:
+            self.sub_lbl = ctk.CTkLabel(
+                inner, text=f".{fmt}",
+                font=("Consolas", 12, "bold"),
+                text_color="#9090b8",
+            )
+        else:
+            self.sub_lbl = ctk.CTkLabel(
+                inner, text="🔒 install required",
+                font=("Segoe UI", 9),
+                text_color="#404058",
+            )
+        self.sub_lbl.pack(pady=(1, 0))
+
+        for w in [self, inner, self.lbl, self.sub_lbl]:
             w.bind("<Button-1>", self._click)
             w.bind("<Enter>",    self._hover_in)
             w.bind("<Leave>",    self._hover_out)
 
     def _click(self, e=None):
-        self.on_select(self.fmt)
+        if not self.disabled_reason:
+            self.on_select(self.fmt)
 
     def _hover_in(self, e=None):
-        if not self.selected:
-            self.configure(fg_color=CARD_HOVER)
+        if self.disabled_reason:
+            self._show_tooltip()
+        elif not self.selected:
+            self.configure(fg_color="#252530", border_color=ACCENT2)
 
     def _hover_out(self, e=None):
-        if not self.selected:
-            self.configure(fg_color=CARD_BG)
+        self._hide_tooltip()
+        if not self.selected and not self.disabled_reason:
+            self.configure(fg_color=CARD_BG, border_color="#2e2e3a")
+
+    def _show_tooltip(self):
+        if self._tooltip_win:
+            return
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() - 70
+        self._tooltip_win = ctk.CTkToplevel(self)
+        self._tooltip_win.wm_overrideredirect(True)
+        self._tooltip_win.wm_geometry(f"+{x}+{y}")
+        self._tooltip_win.configure(fg_color="#1a1a24")
+        self._tooltip_win.attributes("-topmost", True)
+
+        # Icon row
+        ctk.CTkLabel(
+            self._tooltip_win,
+            text=self.disabled_reason,
+            font=("Segoe UI", 11),
+            text_color=WARNING,
+            justify="left",
+            padx=12, pady=8,
+        ).pack()
+
+        # Install hint
+        tool = "libreoffice.org" if "LibreOffice" in self.disabled_reason else "calibre-ebook.com"
+        ctk.CTkLabel(
+            self._tooltip_win,
+            text=f"Free download: {tool}",
+            font=("Segoe UI", 10),
+            text_color=TEXT_DIM,
+            padx=12, pady=(0, 8),
+        ).pack()
+
+    def _hide_tooltip(self):
+        if self._tooltip_win:
+            self._tooltip_win.destroy()
+            self._tooltip_win = None
 
     def set_selected(self, selected):
+        if self.disabled_reason:
+            return
         self.selected = selected
         if selected:
-            self.configure(fg_color=ACCENT)
-            self.lbl.configure(text_color="#ffffff", font=("Consolas", 11, "bold"))
+            self.configure(fg_color=ACCENT, border_color=ACCENT)
+            self.lbl.configure(text_color="#ffffff", font=("Segoe UI", 13, "bold"))
+            self.sub_lbl.configure(text_color="#ddd8ff", font=("Consolas", 12, "bold"))
         else:
-            self.configure(fg_color=CARD_BG)
-            self.lbl.configure(text_color=TEXT_SEC, font=FONT_MONO)
+            self.configure(fg_color=CARD_BG, border_color="#2e2e3a")
+            self.lbl.configure(text_color="#d0d0e8", font=("Segoe UI", 13, "bold"))
+            self.sub_lbl.configure(text_color="#9090b8", font=("Consolas", 12, "bold"))
 
 
 class AnimatedProgressBar(ctk.CTkFrame):
@@ -645,6 +753,35 @@ class RecastApp(ctk.CTk):
             btn.set_active(k == cat_id)
         self.active_cat = cat_id
 
+        # If user clicks a different category while a file is loaded, reset
+        if self.file_path and self.category and cat_id not in ("all", self.category):
+            self._reset_file()
+
+    def _reset_file(self):
+        """Clear the current file and return the UI to its initial state."""
+        self.file_path    = None
+        self.category     = None
+        self.selected_fmt = None
+        self.format_chips = []
+
+        # Reset drop zone
+        self.drop_frame.configure(border_color=BORDER)
+        self.drop_icon.configure(text="⬆", text_color=TEXT_DIM)
+        self.drop_title.configure(text="Click to select a file", text_color=TEXT_SEC)
+        self.drop_sub.configure(
+            text="Images · Documents · Audio · Video · Ebooks · Archives",
+            text_color=TEXT_DIM,
+        )
+
+        # Hide info strip and format section
+        self.info_frame.pack_forget()
+        self.format_section.pack_forget()
+
+        # Reset button and status
+        self.convert_btn.configure(state="disabled", text="Recast File →")
+        self.set_status("Select a file to recast", TEXT_DIM)
+        self.prog.stop_pulse()
+
     def _build_main(self):
         header = ctk.CTkFrame(self.main, fg_color="transparent", height=64)
         header.pack(fill="x", padx=30, pady=(20, 0))
@@ -706,11 +843,11 @@ class RecastApp(ctk.CTk):
         self.format_section = ctk.CTkFrame(self.main, fg_color="transparent")
 
         ctk.CTkLabel(self.format_section, text="Output Format",
-                     font=FONT_TITLE, text_color=TEXT_SEC).pack(anchor="w", pady=(0, 8))
+                     font=("Segoe UI", 14, "bold"), text_color="#c0c0dc").pack(anchor="w", pady=(0, 10))
 
         self.chips_scroll = ctk.CTkScrollableFrame(
             self.format_section, fg_color="transparent",
-            height=100, orientation="horizontal",
+            height=115, orientation="horizontal",
         )
         self.chips_scroll.pack(fill="x")
 
@@ -796,13 +933,15 @@ class RecastApp(ctk.CTk):
                 continue
 
             ctk.CTkLabel(self.chips_scroll, text=group_label,
-                         font=("Segoe UI", 9, "bold"), text_color=TEXT_DIM).grid(
+                         font=("Segoe UI", 9, "bold"), text_color="#7878a0").grid(
                 row=0, column=col, padx=(8, 4), pady=(0, 4), sticky="s"
             )
             col += 1
 
             for fmt in valid:
-                chip = FormatChip(self.chips_scroll, fmt, self._select_format)
+                reason = get_chip_disabled_reason(self.category, in_ext, fmt)
+                chip = FormatChip(self.chips_scroll, fmt, self._select_format,
+                                  disabled_reason=reason)
                 chip.grid(row=0, column=col, padx=3, pady=4, sticky="n")
                 self.format_chips.append(chip)
                 col += 1
@@ -812,8 +951,10 @@ class RecastApp(ctk.CTk):
             )
             col += 1
 
-        if self.format_chips:
-            self._select_format(self.format_chips[0].fmt)
+        # Auto-select first enabled chip
+        first_enabled = next((c for c in self.format_chips if not c.disabled_reason), None)
+        if first_enabled:
+            self._select_format(first_enabled.fmt)
 
     def _select_format(self, fmt):
         self.selected_fmt = fmt
