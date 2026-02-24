@@ -1,3 +1,5 @@
+<img width="892" height="610" alt="image" src="https://github.com/user-attachments/assets/d804c818-3bf9-41de-85dd-f4e883b0398d" />
+
 # Recast
 
 A free, local file converter for Windows. No internet connection required — everything runs on your machine.
